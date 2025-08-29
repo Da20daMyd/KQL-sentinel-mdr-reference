@@ -1,0 +1,895 @@
+{
+  "catalog": {
+    "name": "Microsoft Defender KQL Reference",
+    "version": "2.0.0",
+    "description": "Comprehensive KQL query snippets and table schemas for Microsoft Defender XDR, Azure Monitor, and Azure Sentinel",
+    "platforms": ["defender", "sentinel", "azure"],
+    "last_updated": "2025-08-29",
+    "total_snippets": 103,
+    "categories": ["detection", "hunting", "investigation", "analytics", "performance", "reference"]
+  },
+  "snippets": [
+    {
+      "id": "mde-get-user-from-email",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["EmailEvents"],
+      "operators": ["where", "project", "split", "tostring"],
+      "snippet": "EmailEvents\n| where Timestamp > ago(7d)\n| project RecipientEmailAddress, AccountName = tostring(split(RecipientEmailAddress, \"@\")[0])",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-merge-identity-email-events",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["EmailEvents", "IdentityInfo"],
+      "operators": ["where", "join", "distinct", "project"],
+      "snippet": "EmailEvents\n| where Timestamp > ago(7d)\n| where ThreatTypes has \"Malware\" or ThreatTypes has \"Phish\"\n| join (IdentityInfo | distinct AccountUpn, AccountDisplayName, JobTitle,\nDepartment, City, Country) on $left.RecipientEmailAddress == $right.AccountUpn\n| project Timestamp, NetworkMessageId, Subject, ThreatTypes,\nSenderFromAddress, RecipientEmailAddress, AccountDisplayName, JobTitle,\nDepartment, City, Country",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-device-info-compromised-account",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceInfo", "AlertEvidence", "AlertInfo"],
+      "operators": ["where", "distinct", "join", "project"],
+      "snippet": "DeviceInfo\n| where LoggedOnUsers contains '<account-name>'\n| distinct DeviceId\n| join kind=inner AlertEvidence on DeviceId\n| project AlertId\n| join AlertInfo on AlertId\n| project AlertId, Timestamp, Title, Severity, Category",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-file-event-information",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceInfo", "DeviceFileEvents"],
+      "operators": ["where", "summarize", "join", "take"],
+      "snippet": "DeviceInfo\n| where Timestamp > ago(1d)\n| where ClientVersion startswith \"20.1\"\n| summarize by DeviceId\n| join kind=inner (\n    DeviceFileEvents\n    | where Timestamp > ago(1d)\n) on DeviceId\n| take 10",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-network-event-information",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceInfo", "DeviceNetworkEvents"],
+      "operators": ["where", "summarize", "join", "take"],
+      "snippet": "DeviceInfo\n| where Timestamp > ago(1d)\n| where ClientVersion startswith \"20.1\"\n| summarize by DeviceId\n| join kind=inner (\n    DeviceNetworkEvents\n    | where Timestamp > ago(1d)\n) on DeviceId\n| take 10",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-logon-activities-after-zap",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["EmailPostDeliveryEvents", "IdentityLogonEvents"],
+      "operators": ["where", "project", "join", "between"],
+      "snippet": "EmailPostDeliveryEvents\n| where Timestamp > ago(7d)\n| where ActionType has \"ZAP\" and ActionResult == \"Error\"\n| project ZapTime = Timestamp, ActionType, NetworkMessageId , RecipientEmailAddress\n| join kind=inner IdentityLogonEvents on $left.RecipientEmailAddress == $right.AccountUpn\n| where Timestamp between ((ZapTime-24h) .. (ZapTime+24h))\n| project ZapTime, ActionType, NetworkMessageId , RecipientEmailAddress, AccountUpn,\nLogonTime = Timestamp, AccountDisplayName, Application, Protocol, DeviceName, LogonType",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-logon-attempts-after-credential-theft",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["AlertInfo", "AlertEvidence", "IdentityLogonEvents"],
+      "operators": ["where", "join", "extend", "parse_json", "tostring"],
+      "snippet": "AlertInfo\n| where Timestamp > ago(30d)\n| where Category == \"CredentialAccess\"\n| join AlertEvidence on AlertId\n| extend IsJoined=(parse_json(AdditionalFields).Account.IsDomainJoined)\n| extend TargetAccountSid=tostring(parse_json(AdditionalFields).Account.Sid)\n| where IsJoined has \"true\"\n| join kind=inner IdentityLogonEvents on $left.TargetAccountSid == $right.AccountSid\n| project AccountDisplayName, TargetAccountSid, Application, Protocol, DeviceName, LogonType",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-files-from-malicious-sender",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["EmailAttachmentInfo", "DeviceFileEvents"],
+      "operators": ["where", "isnotempty", "join", "project"],
+      "snippet": "EmailAttachmentInfo\n| where SenderFromAddress =~ \"MaliciousSender@example.com\"\n| where isnotempty(SHA256)\n| join (\nDeviceFileEvents\n| project FileName, SHA256, DeviceName, DeviceId\n) on SHA256\n| project Timestamp, FileName , SHA256, DeviceName, DeviceId,  NetworkMessageId, SenderFromAddress, RecipientEmailAddress",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-logon-attempts-after-malicious-email",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["EmailEvents", "IdentityLogonEvents"],
+      "operators": ["let", "where", "project", "join", "between", "take", "split", "tostring"],
+      "snippet": "let MaliciousEmails=EmailEvents\n| where ThreatTypes has \"Malware\"\n| project TimeEmail = Timestamp, Subject, SenderFromAddress, AccountName = tostring(split(RecipientEmailAddress, \"@\")[0]);\nMaliciousEmails\n| join (\nIdentityLogonEvents\n| project LogonTime = Timestamp, AccountName, DeviceName\n) on AccountName\n| where (LogonTime - TimeEmail) between (0min.. 30min)\n| take 10",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-powershell-activities-after-suspicious-email",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["EmailEvents", "DeviceProcessEvents"],
+      "operators": ["let", "where", "project", "join", "between", "split", "tostring"],
+      "snippet": "let EmailsFromBadSender=EmailEvents\n| where SenderFromAddress =~ \"MaliciousSender@example.com\"\n| project TimeEmail = Timestamp, Subject, SenderFromAddress, AccountName = tostring(split(RecipientEmailAddress, \"@\")[0]);\nEmailsFromBadSender\n| join (\nDeviceProcessEvents\n| where FileName =~ \"powershell.exe\"\n| project TimeProc = Timestamp, AccountName, DeviceName, InitiatingProcessParentFileName, InitiatingProcessFileName, FileName, ProcessCommandLine\n) on AccountName\n| where (TimeProc - TimeEmail) between (0min.. 30min)",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-outdated-macos-devices",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceInfo"],
+      "operators": ["where", "summarize", "join", "take"],
+      "snippet": "DeviceInfo\n| where Timestamp > ago(1d)\n| where OSPlatform == \"macOS\" and  OSVersion !contains \"10.15\" and OSVersion !contains \"11.\"\n| summarize by DeviceId\n| join kind=inner (\n    DeviceInfo\n    | where Timestamp > ago(1d)\n) on DeviceId\n| take 10",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-device-onboarding-status",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceInfo"],
+      "operators": ["where", "summarize", "join", "take"],
+      "snippet": "DeviceInfo\n| where Timestamp > ago(1d)\n| where OnboardingStatus != \"Onboarded\"\n| summarize by DeviceId\n| join kind=inner (\n    DeviceInfo\n    | where Timestamp > ago(1d)\n) on DeviceId\n| take 10",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-suspicious-process-creation",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where", "project"],
+      "snippet": "DeviceProcessEvents\n| where Timestamp > ago(1h)\n| where ProcessIntegrityLevel == \"Low\" and ProcessTokenElevation == \"TokenElevationTypeFull\"\n| project Timestamp, DeviceName, FileName, ProcessCommandLine, AccountName, InitiatingProcessFileName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-file-modifications-by-process",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceFileEvents"],
+      "operators": ["where", "project", "in~"],
+      "snippet": "DeviceFileEvents\n| where Timestamp > ago(1h)\n| where ActionType == \"FileModified\"\n| where InitiatingProcessFileName in~ (\"powershell.exe\", \"cmd.exe\", \"wscript.exe\", \"cscript.exe\")\n| project Timestamp, DeviceName, FileName, FolderPath, InitiatingProcessFileName, InitiatingProcessCommandLine, AccountName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-network-connections-suspicious-ips",
+      "platform": "defender",
+      "category": "investigation",
+      "tables": ["DeviceNetworkEvents"],
+      "operators": ["where", "project", "in"],
+      "snippet": "DeviceNetworkEvents\n| where Timestamp > ago(1h)\n| where RemoteIPType == \"Public\"\n| where RemotePort in (3389, 22, 23, 445, 1433)\n| project Timestamp, DeviceName, RemoteIP, RemotePort, InitiatingProcessFileName, AccountName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-registry-persistence-mechanisms",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["DeviceRegistryEvents"],
+      "operators": ["where", "project", "has"],
+      "snippet": "DeviceRegistryEvents\n| where Timestamp > ago(1h)\n| where RegistryKey has @\"CurrentVersion\\Run\" \n    or RegistryKey has @\"CurrentVersion\\RunOnce\"\n    or RegistryKey has @\"CurrentVersion\\RunServices\"\n| where ActionType == \"RegistryValueSet\"\n| project Timestamp, DeviceName, RegistryKey, RegistryValueName, RegistryValueData, InitiatingProcessFileName, AccountName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-email-threat-summary-by-day",
+      "platform": "defender",
+      "category": "analytics",
+      "tables": ["EmailEvents"],
+      "operators": ["where", "summarize", "count", "bin", "render"],
+      "snippet": "EmailEvents\n| where Timestamp > ago(30d)\n| where ThreatTypes != \"\"\n| summarize ThreatCount = count() by ThreatTypes, bin(Timestamp, 1d)\n| render timechart",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-top-targeted-users",
+      "platform": "defender",
+      "category": "analytics",
+      "tables": ["EmailEvents"],
+      "operators": ["where", "summarize", "count", "top"],
+      "snippet": "EmailEvents\n| where Timestamp > ago(7d)\n| where ThreatTypes has \"Phish\" or ThreatTypes has \"Malware\"\n| summarize AttemptCount = count() by RecipientEmailAddress\n| top 20 by AttemptCount desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-device-vulnerability-summary",
+      "platform": "defender",
+      "category": "analytics",
+      "tables": ["DeviceTvmSoftwareVulnerabilities"],
+      "operators": ["summarize", "dcount", "order"],
+      "snippet": "DeviceTvmSoftwareVulnerabilities\n| summarize VulnerabilityCount = dcount(CveId) by DeviceName, VulnerabilitySeverityLevel\n| order by VulnerabilityCount desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-failed-logon-attempts-by-account",
+      "platform": "defender",
+      "category": "analytics",
+      "tables": ["IdentityLogonEvents"],
+      "operators": ["where", "summarize", "count", "order"],
+      "snippet": "IdentityLogonEvents\n| where Timestamp > ago(1d)\n| where ActionType == \"LogonFailed\"\n| summarize FailedAttempts = count() by AccountName, AccountDomain, FailureReason\n| where FailedAttempts > 5\n| order by FailedAttempts desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-process-creation-frequency",
+      "platform": "defender",
+      "category": "analytics",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where", "summarize", "count", "order"],
+      "snippet": "DeviceProcessEvents\n| where Timestamp > ago(1h)\n| summarize ProcessCount = count() by FileName, FolderPath\n| where ProcessCount > 10\n| order by ProcessCount desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "mde-optimize-large-dataset-queries",
+      "platform": "defender",
+      "category": "performance",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where", "isnotempty", "summarize", "arg_min", "project-reorder"],
+      "snippet": "DeviceProcessEvents\n| where Timestamp > ago(1h)\n| where isnotempty(SHA256)\n| summarize arg_min(Timestamp, *) by SHA256, DeviceId\n| project-reorder Timestamp, DeviceName, FileName, SHA256",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-efficient-join-operations",
+      "platform": "defender",
+      "category": "performance",
+      "tables": ["EmailEvents", "EmailAttachmentInfo"],
+      "operators": ["let", "where", "distinct", "join", "project"],
+      "snippet": "let SuspiciousEmails = EmailEvents\n| where Timestamp > ago(1h)\n| where ThreatTypes != \"\"\n| distinct NetworkMessageId, RecipientEmailAddress;\nSuspiciousEmails\n| join kind=inner (\n    EmailAttachmentInfo\n    | where Timestamp > ago(1h)\n) on NetworkMessageId\n| project NetworkMessageId, RecipientEmailAddress, FileName, SHA256",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-time-based-aggregation",
+      "platform": "defender",
+      "category": "performance",
+      "tables": ["DeviceNetworkEvents"],
+      "operators": ["where", "summarize", "count", "sum", "dcount", "bin", "order"],
+      "snippet": "DeviceNetworkEvents\n| where Timestamp > ago(1d)\n| summarize NetworkEvents = count(), \n            DataTransferred = sum(tolong(AdditionalFields)),\n            UniqueRemoteIPs = dcount(RemoteIP)\n    by bin(Timestamp, 1h), DeviceName\n| order by Timestamp desc",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-detect-lateral-movement",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["IdentityLogonEvents", "DeviceProcessEvents"],
+      "operators": ["where", "join", "project", "in", "in~", "!endswith"],
+      "snippet": "IdentityLogonEvents\n| where Timestamp > ago(4h)\n| where LogonType in (\"RemoteInteractive\", \"Network\")\n| where AccountName !endswith \"$\"\n| join kind=inner (\n    DeviceProcessEvents\n    | where Timestamp > ago(4h)\n    | where FileName in~ (\"psexec.exe\", \"wmic.exe\", \"winrs.exe\", \"mstsc.exe\")\n) on DeviceName\n| project Timestamp, AccountName, DeviceName, LogonType, FileName, ProcessCommandLine",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-data-exfiltration-attempts",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["DeviceNetworkEvents", "DeviceFileEvents"],
+      "operators": ["where", "join", "between", "project", "in"],
+      "snippet": "DeviceNetworkEvents\n| where Timestamp > ago(1h)\n| where RemotePort in (21, 22, 443, 445)\n| join kind=inner (\n    DeviceFileEvents\n    | where Timestamp > ago(1h)\n    | where ActionType == \"FileCreated\" and FileSize > 1048576\n) on DeviceId\n| where (Timestamp - Timestamp1) between (0min .. 5min)\n| project Timestamp, DeviceName, FileName, FileSize, RemoteIP, RemotePort",
+      "complexity": "advanced"
+    },
+    {
+      "id": "mde-privilege-escalation-detection",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where", "project", "!in~"],
+      "snippet": "DeviceProcessEvents\n| where Timestamp > ago(1h)\n| where ProcessTokenElevation == \"TokenElevationTypeFull\"\n| where InitiatingProcessTokenElevation != \"TokenElevationTypeFull\"\n| where InitiatingProcessFileName !in~ (\"services.exe\", \"svchost.exe\", \"wininit.exe\")\n| project Timestamp, DeviceName, FileName, ProcessCommandLine, \n    InitiatingProcessFileName, InitiatingProcessCommandLine, AccountName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-suspicious-powershell-activities",
+      "platform": "defender",
+      "category": "hunting",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where", "project", "has_any"],
+      "snippet": "DeviceProcessEvents\n| where Timestamp > ago(1h)\n| where FileName =~ \"powershell.exe\"\n| where ProcessCommandLine has_any (\"-EncodedCommand\", \"-enc\", \"-e\", \n    \"bypass\", \"hidden\", \"noprofile\", \"downloadstring\", \"invoke-expression\")\n| project Timestamp, DeviceName, ProcessCommandLine, AccountName, InitiatingProcessFileName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "mde-abnormal-service-creation",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["DeviceEvents"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has_any"],
+      "snippet": "DeviceEvents\n| where Timestamp > ago(1h)\n| where ActionType == \"ServiceInstalled\"\n| extend ServiceName = tostring(parse_json(AdditionalFields).ServiceName)\n| extend ServicePath = tostring(parse_json(AdditionalFields).ServiceFileName)\n| where ServicePath has_any (\"temp\", \"appdata\", \"users\", \"public\")\n| project Timestamp, DeviceName, ServiceName, ServicePath, AccountName",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-get-all-user-creation-events",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "project"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| where ActivityDisplayName == \"Add user\"\n| project TimeGenerated, InitiatedBy, TargetResources, Result",
+      "complexity": "basic"
+    },
+    {
+      "id": "azure-find-failed-operations",
+      "platform": "sentinel",
+      "category": "detection",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "summarize", "count", "order"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(24h)\n| where Result == \"failure\"\n| summarize FailureCount = count() by ActivityDisplayName, ResultReason\n| order by FailureCount desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "azure-track-administrative-actions",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "in"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| where AADOperationType in (\"Add\", \"Update\", \"Delete\")\n| extend InitiatorUPN = tostring(parse_json(InitiatedBy).user.userPrincipalName)\n| extend InitiatorApp = tostring(parse_json(InitiatedBy).app.displayName)\n| project TimeGenerated, ActivityDisplayName, InitiatorUPN, InitiatorApp, Result",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-monitor-group-membership-changes",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "in"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(24h)\n| where ActivityDisplayName in (\"Add member to group\", \"Remove member from group\")\n| extend GroupName = tostring(parse_json(TargetResources)[0].displayName)\n| extend ModifiedUser = tostring(parse_json(TargetResources)[1].userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, GroupName, ModifiedUser, InitiatedBy",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-audit-application-permission-grants",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(30d)\n| where ActivityDisplayName has \"consent\"\n| extend Application = tostring(parse_json(TargetResources)[0].displayName)\n| extend Permissions = tostring(parse_json(TargetResources)[0].modifiedProperties)\n| project TimeGenerated, Application, Permissions, InitiatedBy, Result",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-track-password-reset-activities",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| where ActivityDisplayName has \"password\"\n| extend TargetUser = tostring(parse_json(TargetResources)[0].userPrincipalName)\n| extend InitiatorUser = tostring(parse_json(InitiatedBy).user.userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, TargetUser, InitiatorUser, Result",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-find-role-assignment-changes",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(30d)\n| where ActivityDisplayName has \"role\"\n| extend RoleName = tostring(parse_json(TargetResources)[0].displayName)\n| extend AssignedTo = tostring(parse_json(TargetResources)[1].userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, RoleName, AssignedTo, InitiatedBy",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-monitor-service-principal-activities",
+      "platform": "sentinel",
+      "category": "analytics",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "summarize", "count", "order", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| where InitiatedBy has \"servicePrincipal\"\n| extend ServicePrincipalName = tostring(parse_json(InitiatedBy).app.servicePrincipalName)\n| extend ServicePrincipalId = tostring(parse_json(InitiatedBy).app.servicePrincipalId)\n| summarize Operations = count() by ServicePrincipalName, ActivityDisplayName\n| order by Operations desc",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-detect-unusual-activity-patterns",
+      "platform": "sentinel",
+      "category": "detection",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "project", "hourofday", "in"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(24h)\n| extend Hour = hourofday(TimeGenerated)\n| where Hour < 6 or Hour > 22  // Outside business hours\n| where AADOperationType in (\"Add\", \"Delete\", \"Update\")\n| project TimeGenerated, ActivityDisplayName, InitiatedBy, Result",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-track-conditional-access-policy-changes",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(30d)\n| where ActivityDisplayName has \"conditional access\"\n| extend PolicyName = tostring(parse_json(TargetResources)[0].displayName)\n| extend ModifiedBy = tostring(parse_json(InitiatedBy).user.userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, PolicyName, ModifiedBy, Result",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-summary-activities-by-service",
+      "platform": "sentinel",
+      "category": "analytics",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "summarize", "count", "countif", "round", "order"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| summarize ActivityCount = count(), \n           FailureCount = countif(Result == \"failure\"),\n           SuccessRate = round(100.0 * countif(Result == \"success\") / count(), 2)\n    by LoggedByService\n| order by ActivityCount desc",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "azure-find-deleted-resources",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(30d)\n| where AADOperationType == \"Delete\"\n| extend DeletedResource = tostring(parse_json(TargetResources)[0].displayName)\n| extend DeletedBy = tostring(parse_json(InitiatedBy).user.userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, DeletedResource, DeletedBy",
+      "complexity": "basic"
+    },
+    {
+      "id": "azure-monitor-guest-user-activities",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "contains"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(7d)\n| where TargetResources contains \"#EXT#\"  // External/Guest users\n| extend GuestUser = tostring(parse_json(TargetResources)[0].userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, GuestUser, InitiatedBy, Result",
+      "complexity": "basic"
+    },
+    {
+      "id": "azure-track-mfa-configuration-changes",
+      "platform": "sentinel",
+      "category": "investigation",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "extend", "parse_json", "tostring", "project", "has"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(30d)\n| where ActivityDisplayName has \"authentication\" or ActivityDisplayName has \"MFA\"\n| extend TargetUser = tostring(parse_json(TargetResources)[0].userPrincipalName)\n| project TimeGenerated, ActivityDisplayName, TargetUser, InitiatedBy, Result",
+      "complexity": "basic"
+    },
+    {
+      "id": "azure-audit-directory-sync-operations",
+      "platform": "sentinel",
+      "category": "analytics",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "summarize", "count", "bin", "render"],
+      "snippet": "AuditLogs\n| where TimeGenerated > ago(24h)\n| where LoggedByService == \"Directory Synchronization\"\n| summarize SyncCount = count() by bin(TimeGenerated, 1h), Result\n| render timechart",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-sort-operator-basic",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["sort"],
+      "snippet": "StormEvents\n| sort by State asc, StartTime desc",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-sort-with-take",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["sort", "take"],
+      "snippet": "StormEvents\n| sort by StartTime desc\n| take 10",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-take-operator-basic",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["take"],
+      "snippet": "StormEvents | take 5",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-take-with-filter",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["where", "take"],
+      "snippet": "SecurityEvent \n| where TimeGenerated > ago(1h)\n| take 100",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-count-operator-basic",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["count"],
+      "snippet": "StormEvents | count",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-count-with-filter",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["where", "count"],
+      "snippet": "SecurityEvent\n| where TimeGenerated > ago(1d)\n| count",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-distinct-multiple-columns",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["where", "distinct"],
+      "snippet": "StormEvents\n| where InjuriesDirect > 45\n| distinct State, EventType",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-distinct-single-column",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["distinct"],
+      "snippet": "SecurityEvent\n| distinct Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-parse-traces",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Traces"],
+      "operators": ["parse"],
+      "snippet": "Traces\n| parse EventText with * \"resourceName=\" resourceName \", totalSlices=\" totalSlices: long * \"sliceNumber=\" sliceNumber: long *",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-parse-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["parse", "project"],
+      "snippet": "SecurityEvent\n| parse CommandLine with * \"cmd.exe\" * \"/c\" command *\n| project Computer, command",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-parse-regex-mode",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Traces"],
+      "operators": ["parse"],
+      "snippet": "Traces\n| parse kind=regex EventText with \"(.*?)[a-zA-Z]*=\" resourceName @\", totalSlices=\\s*\\d+\\s*.*?sliceNumber=\" sliceNumber: long",
+      "complexity": "advanced"
+    },
+    {
+      "id": "kql-evaluate-autocluster",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["evaluate"],
+      "snippet": "StormEvents \n| evaluate autocluster()",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-evaluate-pivot",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["evaluate"],
+      "snippet": "T \n| evaluate pivot(PivotColumn, AggregatedColumn=count())",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-evaluate-basket",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["where", "evaluate"],
+      "snippet": "StormEvents\n| where State == \"TEXAS\"\n| evaluate basket()",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-count-aggregation",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize"],
+      "snippet": "StormEvents\n| summarize Count=count() by State",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-count-security-events",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["where", "summarize"],
+      "snippet": "SecurityEvent\n| where TimeGenerated > ago(1d)\n| summarize EventCount=count() by EventID",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-avg-aggregation",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize", "avg"],
+      "snippet": "StormEvents\n| summarize AvgDamageToCrops = avg(DamageCrops) by State",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-avg-perf-counter",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Perf"],
+      "operators": ["where", "summarize", "avg"],
+      "snippet": "Perf\n| where CounterName == \"% Processor Time\"\n| summarize AvgCpuUsage = avg(CounterValue) by Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-sum-aggregation",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize", "count", "sum", "sort"],
+      "snippet": "StormEvents\n| summarize EventCount=count(), TotalDamages = sum(DamageCrops+DamageProperty) by State\n| sort by TotalDamages",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-sum-perf-bytes",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Perf"],
+      "operators": ["where", "summarize", "sum"],
+      "snippet": "Perf\n| where CounterName == \"Bytes Received/sec\"\n| summarize TotalBytes = sum(CounterValue) by Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-min-aggregation",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize", "min"],
+      "snippet": "StormEvents\n| summarize FirstEvent=min(StartTime)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-min-heartbeat",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Heartbeat"],
+      "operators": ["summarize", "min"],
+      "snippet": "Heartbeat\n| summarize EarliestHeartbeat = min(TimeGenerated) by Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-max-aggregation",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize", "max"],
+      "snippet": "StormEvents\n| summarize LatestEvent=max(StartTime)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-max-cpu-usage",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Perf"],
+      "operators": ["where", "summarize", "max"],
+      "snippet": "Perf\n| where CounterName == \"% Processor Time\"\n| summarize MaxCpuUsage = max(CounterValue) by Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-dcount-storm-events",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["summarize", "dcount", "order"],
+      "snippet": "StormEvents\n| summarize DifferentEvents=dcount(EventType) by State\n| order by DifferentEvents",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-dcount-unique-users",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["where", "summarize", "dcount"],
+      "snippet": "SecurityEvent\n| where TimeGenerated > ago(1d)\n| summarize UniqueUsers = dcount(Account) by Computer",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-dcount-with-accuracy",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SigninLogs"],
+      "operators": ["where", "summarize", "dcount"],
+      "snippet": "SigninLogs\n| where TimeGenerated > ago(7d)\n| summarize UniqueIPs = dcount(IPAddress, 2)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-strcat-basic",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "strcat"],
+      "snippet": "print str = strcat(\"hello\", \" \", \"world\")",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-strcat-multiline",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "strcat"],
+      "snippet": "print MultiLineString = strcat(\"Line 1\\n\", \"Line 2\\n\", \"Line 3\")",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-strcat-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "strcat", "project"],
+      "snippet": "SecurityEvent\n| extend FullCommand = strcat(Process, \" \", CommandLine)\n| project Computer, FullCommand",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-strcat-signin-logs",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SigninLogs"],
+      "operators": ["extend", "strcat"],
+      "snippet": "SigninLogs\n| extend UserLocation = strcat(UserPrincipalName, \" from \", Location)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-substring-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "substring", "project"],
+      "snippet": "SecurityEvent\n| extend ProcessName = substring(Process, 0, 10)\n| project Computer, ProcessName",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-substring-event-id",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Event"],
+      "operators": ["extend", "substring", "tostring"],
+      "snippet": "Event\n| extend EventIDShort = substring(tostring(EventID), 0, 3)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-tolower-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "tolower", "where", "contains"],
+      "snippet": "SecurityEvent\n| extend ProcessLower = tolower(Process)\n| where ProcessLower contains \"cmd\"",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-tolower-signin-logs",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SigninLogs"],
+      "operators": ["extend", "tolower", "summarize", "count"],
+      "snippet": "SigninLogs\n| extend UserLower = tolower(UserPrincipalName)\n| summarize count() by UserLower",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-toupper-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "toupper", "project"],
+      "snippet": "SecurityEvent\n| extend ProcessUpper = toupper(Process)\n| project Computer, ProcessUpper",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-toupper-event-source",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Event"],
+      "operators": ["extend", "toupper", "where", "startswith"],
+      "snippet": "Event\n| extend SourceUpper = toupper(Source)\n| where SourceUpper startswith \"MICROSOFT\"",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-ago-basic-filter",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["where", "ago"],
+      "snippet": "T | where Timestamp > ago(1h)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-ago-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["where", "ago", "count"],
+      "snippet": "SecurityEvent\n| where TimeGenerated > ago(24h)\n| count",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-ago-heartbeat-range",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["Heartbeat"],
+      "operators": ["where", "between", "ago", "summarize", "count"],
+      "snippet": "Heartbeat\n| where TimeGenerated between (ago(7d) .. ago(1d))\n| summarize count() by Computer",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-ago-signin-logs",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SigninLogs"],
+      "operators": ["where", "ago"],
+      "snippet": "SigninLogs  \n| where TimeGenerated > ago(30m)\n| where ResultType != 0",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-now-basic",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "now"],
+      "snippet": "print now()",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-now-with-offset",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "now"],
+      "snippet": "print now(-2d)",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-now-storm-events-elapsed",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["StormEvents"],
+      "operators": ["extend", "now", "take"],
+      "snippet": "StormEvents\n| extend Elapsed=now() - StartTime\n| take 10",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-now-security-event-time-since",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "now", "where"],
+      "snippet": "SecurityEvent\n| extend TimeSinceEvent = now() - TimeGenerated\n| where TimeSinceEvent < 1h",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-datetime-add-examples",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "datetime_add", "make_datetime"],
+      "snippet": "print  year = datetime_add('year',1,make_datetime(2017,1,1)),\nquarter = datetime_add('quarter',1,make_datetime(2017,1,1)),\nmonth = datetime_add('month',1,make_datetime(2017,1,1)),\nweek = datetime_add('week',1,make_datetime(2017,1,1)),\nday = datetime_add('day',1,make_datetime(2017,1,1)),\nhour = datetime_add('hour',1,make_datetime(2017,1,1)),\nminute = datetime_add('minute',1,make_datetime(2017,1,1)),\nsecond = datetime_add('second',1,make_datetime(2017,1,1))",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-datetime-add-negative",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "datetime_add", "make_datetime"],
+      "snippet": "print  year = datetime_add('year',-5,make_datetime(2017,1,1)),\nquarter = datetime_add('quarter',12,make_datetime(2017,1,1)),\nmonth = datetime_add('month',-15,make_datetime(2017,1,1)),\nweek = datetime_add('week',100,make_datetime(2017,1,1))",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-datetime-add-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "datetime_add", "project"],
+      "snippet": "SecurityEvent\n| extend FutureTime = datetime_add('hour', 24, TimeGenerated)\n| project Computer, TimeGenerated, FutureTime",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-datetime-diff-examples",
+      "platform": "azure",
+      "category": "reference",
+      "tables": [],
+      "operators": ["print", "datetime_diff", "datetime"],
+      "snippet": "print\nyear = datetime_diff('year',datetime(2017-01-01),datetime(2000-12-31)),\nquarter = datetime_diff('quarter',datetime(2017-07-01),datetime(2017-03-30)),\nmonth = datetime_diff('month',datetime(2017-01-01),datetime(2015-12-30)),\nweek = datetime_diff('week',datetime(2017-10-29 00:00),datetime(2017-09-30 23:59)),\nday = datetime_diff('day',datetime(2017-10-29 00:00),datetime(2017-09-30 23:59)),\nhour = datetime_diff('hour',datetime(2017-10-31 01:00),datetime(2017-10-30 23:59)),\nminute = datetime_diff('minute',datetime(2017-10-30 23:05:01),datetime(2017-10-30 23:00:59)),\nsecond = datetime_diff('second',datetime(2017-10-30 23:00:10.100),datetime(2017-10-30 23:00:00.900))",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "kql-datetime-diff-security-event",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SecurityEvent"],
+      "operators": ["extend", "datetime_diff", "now", "where"],
+      "snippet": "SecurityEvent\n| extend EventAge = datetime_diff('hour', now(), TimeGenerated)\n| where EventAge < 24",
+      "complexity": "basic"
+    },
+    {
+      "id": "kql-datetime-diff-signin-logs",
+      "platform": "azure",
+      "category": "reference",
+      "tables": ["SigninLogs"],
+      "operators": ["extend", "datetime_diff", "where"],
+      "snippet": "SigninLogs\n| extend SessionDuration = datetime_diff('minute', TimeGenerated, CreatedDateTime)\n| where SessionDuration > 0",
+      "complexity": "basic"
+    },
+    {
+      "id": "readme-basic-threat-detection",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["EmailEvents"],
+      "operators": ["where", "has"],
+      "snippet": "// Basic threat detection\nEmailEvents\n| where ThreatTypes has \"Malware\" or ThreatTypes has \"Phish\"",
+      "complexity": "basic"
+    },
+    {
+      "id": "readme-privilege-escalation-detection",
+      "platform": "defender",
+      "category": "detection",
+      "tables": ["DeviceProcessEvents"],
+      "operators": ["where"],
+      "snippet": "// Privilege escalation detection  \nDeviceProcessEvents\n| where ProcessTokenElevation == \"TokenElevationTypeFull\"\n| where InitiatingProcessTokenElevation != \"TokenElevationTypeFull\"",
+      "complexity": "intermediate"
+    },
+    {
+      "id": "readme-azure-audit-failures",
+      "platform": "sentinel",
+      "category": "analytics",
+      "tables": ["AuditLogs"],
+      "operators": ["where", "summarize", "count"],
+      "snippet": "// Azure audit failures\nAuditLogs\n| where Result == \"failure\"\n| summarize count() by ActivityDisplayName",
+      "complexity": "basic"
+    }
+  ]
+}
